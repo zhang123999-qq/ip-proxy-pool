@@ -21,7 +21,7 @@ from typing import List, Optional
 
 import httpx
 
-from .base import BaseCrawler, RateLimiter
+from .base import BaseCrawler, RateLimiter, _detect_charset
 from models import ProxyItem
 from pool import pool
 from utils import logger
@@ -164,7 +164,10 @@ class CrawlerManager:
 
         # 统计结果
         result.success_sources = result.total_sources - result.failed_sources
-        if result.failed_sources == result.total_sources:
+        # 只在「至少有源 + 全部失败」时才累加连续失败计数
+        # 否则空 crawlers 列表（total=0）会被误判为「全失败」
+        if result.total_sources > 0 and \
+                result.failed_sources == result.total_sources:
             self._consecutive_full_fails += 1
         else:
             self._consecutive_full_fails = 0
@@ -333,7 +336,8 @@ class CrawlerManager:
                         )
                     resp.raise_for_status()
                     if resp.encoding is None or resp.encoding == "ISO-8859-1":
-                        resp.encoding = resp.apparent_encoding or "utf-8"
+                        raw = await resp.aread()
+                        resp.encoding = _detect_charset(raw)
                     return resp.text
             except Exception as e:
                 logger.debug(

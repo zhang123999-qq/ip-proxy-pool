@@ -26,7 +26,31 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
 
 import httpx
+import chardet
 from bs4 import BeautifulSoup
+
+
+# ============================================================
+# 编码探测（解决 httpx.Response 没有 apparent_encoding 问题）
+# ============================================================
+def _detect_charset(raw: bytes) -> str:
+    """
+    用 chardet 探测响应原始字节编码（httpx 0.27+ 取消了 apparent_encoding）。
+
+    :param raw: 响应原始字节
+    :return: 探测到的编码（兜底 utf-8）
+    """
+    if not raw:
+        return "utf-8"
+    try:
+        detected = chardet.detect(raw)
+        enc = (detected or {}).get("encoding") or "utf-8"
+        # chardet 在非 ASCII 极短内容上可能返回 None
+        if not enc:
+            return "utf-8"
+        return enc
+    except Exception:
+        return "utf-8"
 
 from config import (
     CRAWL_TIMEOUT,         # 单次请求超时
@@ -305,14 +329,16 @@ class BaseCrawler(ABC):
         """GET 并返回 HTML 文本（包装 _request，更易用）
 
         自动处理编码：很多中文站没有正确声明 charset，
-        apparent_encoding 来自 chardet，能自动识别。
+        用 chardet 直接探测响应原始字节编码（替代不存在的
+        resp.apparent_encoding，httpx 0.27+ 取消该属性）。
         """
         resp = await self._request("GET", url, **kwargs)
         if resp is None:
             return None
         # 显式指定编码，避免中文站乱码
         if resp.encoding is None or resp.encoding == "ISO-8859-1":
-            resp.encoding = resp.apparent_encoding or "utf-8"
+            raw = await resp.aread()
+            resp.encoding = _detect_charset(raw)
         return resp.text
 
     async def _get_json(self, url: str, **kwargs) -> Optional[dict]:
@@ -401,23 +427,27 @@ class BaseCrawler(ABC):
             rows = soup.select("table tbody tr")
             if rows:
                 # ----- 表格模式 -----
+                # 每行的协议默认值都用入参 proto，不要被上一行污染
                 for tr in rows:
+                    # 行内局部变量：避免循环外 proto 被改影响后续行
+                    row_proto = proto
                     tds = tr.find_all("td")
                     # 列数不够说明这行是非数据行（表头/空白），跳过
                     if len(tds) <= max(ip_col, port_col, proto_col):
                         continue
                     ip = tds[ip_col].get_text(strip=True)
                     port = tds[port_col].get_text(strip=True)
-                    # 协议列存在且值是 http/https/both → 用本格；否则沿用默认
+                    # 协议列存在且值是 http/https/both → 用本格；
+                    # 否则保持本行默认 row_proto（不变循环外 proto）
                     if proto_col >= 0 and len(tds) > proto_col:
                         cell_proto = tds[proto_col].get_text(
                             strip=True
                         ).lower()
                         if cell_proto in ("http", "https", "both"):
-                            proto = cell_proto
+                            row_proto = cell_proto
                     if ip and port.isdigit():
                         items.append(
-                            BaseCrawler.make_item(ip, port, proto)
+                            BaseCrawler.make_item(ip, port, row_proto)
                         )
             else:
                 # ----- 文本 fallback（站点改版后没表格）-----

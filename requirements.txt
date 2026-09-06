@@ -20,3 +20,7 @@ pydantic==2.9.2
 # 工具库
 python-dotenv==1.0.1
 loguru==0.7.2
+
+# 编码探测：兜底处理中文站没声明 charset 的情况
+# httpx 0.27+ 取消了 Response.apparent_encoding，需要自己用 chardet 替代
+chardet>=5.0,<8.0

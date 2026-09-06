@@ -355,7 +355,10 @@ class GitHubProxyListCrawler(BaseCrawler):
         # 小批量源（互为备份）
         ("http", "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt"),     # ~40
         ("https","https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/https.txt"),    # ~13
-        ("socks5","https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"),    # ~260
+        # 注：socks4/socks5 源暂时移除
+        # - httpx 0.27 不支持 socks 协议代理（httpx-socks 需要额外的三方库）
+        # - 采集后会被 ProxyProtocol 兜底成 http，落池后被 L1 TCP 验证剔除，浪费资源
+        # - 若未来要支持，可改用 httpx-socks 库并在 validator 里加 socks 协议分支
     ]
 
     async def fetch(self) -> List[ProxyItem]:

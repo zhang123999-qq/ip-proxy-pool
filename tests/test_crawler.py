@@ -51,6 +51,32 @@ def test_extract_ip_port():
     print("✓ test_extract_ip_port")
 
 
+def test_parse_table_proto_no_pollution():
+    """回归测试：parse_table_or_text 不会让协议变量跨行污染
+
+    场景：第 1 行协议列是 https，第 2 行是 socks4（不在白名单），
+          第 3 行是 http。Bug 出现时第 2 行会被错标为 https。
+    """
+    html = """
+    <table>
+      <tbody>
+        <tr><td>1.1.1.1</td><td>80</td><td>elapsed</td><td>https</td></tr>
+        <tr><td>2.2.2.2</td><td>8080</td><td>elapsed</td><td>socks4</td></tr>
+        <tr><td>3.3.3.3</td><td>8888</td><td>elapsed</td><td>http</td></tr>
+      </tbody>
+    </table>
+    """
+    items = BaseCrawler.parse_table_or_text(
+        html, proto="http", ip_col=0, port_col=1, proto_col=3,
+    )
+    proto_by_ip = {it.ip: it.protocol.value for it in items}
+    assert proto_by_ip["1.1.1.1"] == "https", proto_by_ip
+    # socks4 不在白名单 → 回退到入参 proto="http"，而**不是**上一行的 https
+    assert proto_by_ip["2.2.2.2"] == "http", proto_by_ip
+    assert proto_by_ip["3.3.3.3"] == "http", proto_by_ip
+    print("✓ test_parse_table_proto_no_pollution")
+
+
 def test_make_item():
     """测试 ProxyItem 构造"""
     item = BaseCrawler.make_item("1.2.3.4", 8080, "https")
@@ -300,6 +326,7 @@ async def test_manager_isolation():
 # ============================================================
 if __name__ == "__main__":
     test_extract_ip_port()
+    test_parse_table_proto_no_pollution()
     test_make_item()
     test_random_headers()
 
