@@ -1,0 +1,111 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# 测试 / 类型检查缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ============================================================
+# 数据 / 日志 / 临时文件
+# ============================================================
+# SQLite 数据库（含 WAL 模式三个文件）
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-shm
+*.db-wal
+
+# JSON 历史（仅保留迁移用，运行时不再生成）
+data/proxy_pool.json
+data/*.json.bak
+
+# 验证源快照（运行时产物，每次跑都覆盖）
+data/verified_sources.txt
+
+# 日志
+*.log
+logs/*.log*
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+~$*
+
+# ============================================================
+# IDE / 编辑器
+# ============================================================
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.project
+.pydevproject
+
+# ============================================================
+# Docker（这些是项目文件，要提交！）
+# ============================================================
+# Dockerfile 和 .dockerignore 不在这里排除，会随项目一起提交
+
+# ============================================================
+# 敏感信息（千万别提交！）
+# ============================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ============================================================
+# 项目自定义
+# ============================================================
+# 临时调试文件
+debug_*.py
+test_*.py.bak
+scratch_*.py
+
+# 测试报告
+test_results/
+test_report.html

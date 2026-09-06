@@ -1,0 +1,101 @@
+# ============================================================
+# IP 代理池 — Docker Compose 编排
+# ============================================================
+# 用法：
+#   docker compose up -d --build      # 构建并后台启动
+#   docker compose logs -f proxy-pool  # 跟踪日志
+#   docker compose restart             # 重启
+#   docker compose down                # 停止并删除容器（数据卷保留）
+#   docker compose down -v             # 同时删除数据卷（清空数据）
+# ------------------------------------------------------------
+
+services:
+  proxy-pool:
+    # 本地构建（无需推镜像）
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ip-proxy-pool:latest
+    container_name: ip-proxy-pool
+    restart: unless-stopped   # 异常退出自动重启（崩溃保护）
+
+    # 端口映射：左边是宿主机，右边是容器内
+    #   8000:8000  →  宿主机:容器
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+    # 环境变量（覆盖 config.py 的默认值）
+    # 推荐用 .env 文件管理敏感信息（不要把 ADMIN_TOKEN 写死）
+    environment:
+      # ---- 基础 ----
+      - TZ=${TZ:-Asia/Shanghai}
+      - PYTHONUNBUFFERED=1
+
+      # ---- API ----
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+
+      # ---- 调度（分钟/小时）----
+      - JOB_CRAWL_INTERVAL_MIN=${JOB_CRAWL_INTERVAL_MIN:-10}
+      - JOB_VALIDATE_INTERVAL_MIN=${JOB_VALIDATE_INTERVAL_MIN:-5}
+      - JOB_PERSIST_INTERVAL_HOUR=${JOB_PERSIST_INTERVAL_HOUR:-1}
+
+      # ---- 反爬 ----
+      - CRAWL_RATE_PER_SEC=${CRAWL_RATE_PER_SEC:-2.0}
+      - CRAWL_MIN_DELAY=${CRAWL_MIN_DELAY:-1.0}
+      - CRAWL_MAX_DELAY=${CRAWL_MAX_DELAY:-3.0}
+
+      # ---- 日志 ----
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_MAX_LINES=${LOG_MAX_LINES:-100000}
+      - LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS:-10}
+
+      # ---- 验证 ----
+      - VALIDATE_TIMEOUT=${VALIDATE_TIMEOUT:-10}
+      - VALIDATE_CONCURRENCY=${VALIDATE_CONCURRENCY:-50}
+
+    # 数据卷：让 SQLite 数据库和日志「容器重建也不丢」
+    volumes:
+      # SQLite 数据库 + 自定义源
+      - proxy_data:/app/data
+      # 日志（保留在宿主机，方便排查）
+      - proxy_logs:/app/logs
+
+    # 资源限制（防止内存失控影响宿主机）
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"          # 最多 2 核
+          memory: 1024M        # 最多 1G 内存
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+    # 健康检查（与 Dockerfile 里的 HEALTHCHECK 一致）
+    # Docker Compose 可以覆盖镜像里的默认值
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s   # 启动后给 30s 跑采集任务再开始探测
+
+    # 日志驱动：限制单容器日志占满磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"    # 单文件最大 10MB
+        max-file: "3"      # 保留 3 个滚动文件
+
+    # 网络（默认 bridge 即可，需要加代理网关时再切 host）
+    network_mode: bridge
+
+# ============================================================
+# 命名卷（Docker 管理，比 bind mount 跨平台兼容性好）
+# ============================================================
+volumes:
+  proxy_data:
+    name: ip-proxy-pool_data
+  proxy_logs:
+    name: ip-proxy-pool_logs
