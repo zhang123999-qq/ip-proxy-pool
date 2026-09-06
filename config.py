@@ -132,8 +132,8 @@ SCORE_DOWN_CRAWL_FAIL = _getenv_int("SCORE_DOWN_CRAWL_FAIL", 1)
 CRAWL_TOTAL_FAIL_THRESHOLD = _getenv_int("CRAWL_TOTAL_FAIL_THRESHOLD", 5)
 
 # ==================== 调度配置 ====================
-# 采集间隔：免费代理源更新频率不高，100 分钟已足够
-JOB_CRAWL_INTERVAL_MIN = _getenv_int("JOB_CRAWL_INTERVAL_MIN", 100)
+# 采集间隔：免费代理源更新频率不高，500 分钟已足够
+JOB_CRAWL_INTERVAL_MIN = _getenv_int("JOB_CRAWL_INTERVAL_MIN", 500)
 # 验证间隔：验证现在 75 秒一轮，8 分钟间隔避免排队
 JOB_VALIDATE_INTERVAL_MIN = _getenv_int("JOB_VALIDATE_INTERVAL_MIN", 8)
 JOB_PERSIST_INTERVAL_HOUR = _getenv_int("JOB_PERSIST_INTERVAL_HOUR", 1)

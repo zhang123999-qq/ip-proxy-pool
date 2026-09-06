@@ -465,7 +465,62 @@ class ProxMintApiCrawler(BaseCrawler):
 
 
 # ============================================================
-# 内置爬虫注册表（共 19 个源：10 表格 + 5 API + 1 HTML 海外 + 1 聚合 + 4 新 API）
+# 🆕 扩展公开 API 源（2026-09-06 验证可用）
+# ============================================================
+class ProxyScrapeV2AllCrawler(BaseCrawler):
+    """ProxyScrape v2 all（混合协议，每行 ip:port 无协议标记 → 默认 both 兼容 http/https）"""
+    name = "proxyscrape-v2-all"
+
+    async def fetch(self) -> List[ProxyItem]:
+        url = (
+            "https://api.proxyscrape.com/v2/?request=displayproxies"
+            "&protocol=all&timeout=5000&country=all"
+        )
+        text = await self._get_html(url)
+        items: List[ProxyItem] = []
+        if text:
+            # protocol=all 返回混合协议行，默认 both 让 HTTP/HTTPS 验证都能走
+            for ip, port in self.extract_ip_port(text):
+                items.append(self.make_item(ip, port, "both"))
+        logger.info(f"[{self.name}] 采集到 {len(items)} 条")
+        return items
+
+
+class ProxyScrapeV1Crawler(BaseCrawler):
+    """ProxyScrape v1（兼容旧版，~50ms 响应，部分有用）"""
+    name = "proxyscrape-v1"
+
+    async def fetch(self) -> List[ProxyItem]:
+        url = (
+            "https://api.proxyscrape.com/?request=displayproxies"
+            "&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all"
+        )
+        text = await self._get_html(url)
+        items: List[ProxyItem] = []
+        if text:
+            for ip, port in self.extract_ip_port(text):
+                items.append(self.make_item(ip, port, "http"))
+        logger.info(f"[{self.name}] 采集到 {len(items)} 条")
+        return items
+
+
+class MuRongPIGHttpCrawler(BaseCrawler):
+    """MuRongPIG http（GitHub 仓库，量极大，靠打分系统筛）"""
+    name = "murongpig-http"
+
+    async def fetch(self) -> List[ProxyItem]:
+        url = "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt"
+        text = await self._get_html(url)
+        items: List[ProxyItem] = []
+        if text:
+            for ip, port in self.extract_ip_port(text):
+                items.append(self.make_item(ip, port, "http"))
+        logger.info(f"[{self.name}] 采集到 {len(items)} 条")
+        return items
+
+
+# ============================================================
+# 内置爬虫注册表（共 22 个源：10 表格 + 8 API + 1 HTML 海外 + 1 聚合 + 2 备用 + 1 mixed）
 # ============================================================
 # 加新源：在末尾追加即可
 BUILTIN_CRAWLERS: List[BaseCrawler] = [
@@ -490,6 +545,10 @@ BUILTIN_CRAWLERS: List[BaseCrawler] = [
     ProxyScrapeV4Crawler(),       # ProxyScrape v4（http+https）
     ProxyScrapeV2HttpsCrawler(),  # ProxyScrape v2 HTTPS（~840/次）
     ProxMintApiCrawler(),         # ProxMint 备用
+    # 🆕 2026-09-06 追加
+    ProxyScrapeV2AllCrawler(),    # ProxyScrape v2 all（混合协议）
+    ProxyScrapeV1Crawler(),       # ProxyScrape v1 兼容版
+    MuRongPIGHttpCrawler(),       # MuRongPIG GitHub 仓库（量极大）
     # GitHub 聚合源（11 仓库聚合，单次 3w+）
     SpeedXProxyListCrawler(),     # GitHub 多仓库聚合
 ]
