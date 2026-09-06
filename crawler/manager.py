@@ -21,6 +21,7 @@ from typing import List, Optional
 
 import httpx
 
+from config import CRAWL_TIMEOUT, SAME_PROXY_PER_SOURCE_MAX
 from .base import BaseCrawler, RateLimiter, _detect_charset
 from models import ProxyItem
 from pool import pool
@@ -192,7 +193,6 @@ class CrawlerManager:
         - PROXY 模式下：所有爬虫都用代理
         - DIRECT 模式下：不分配代理
         """
-        from config import SAME_PROXY_PER_SOURCE_MAX
         assignment: dict = {}
         if mode == CrawlMode.DIRECT.value or not candidates:
             for cr in self.crawlers:
