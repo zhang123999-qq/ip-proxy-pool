@@ -118,21 +118,30 @@ async def _add_one(ip="10.0.0.1", port=8080, score=12):
 
 
 def test_proxy_item_response_includes_all_11_fields():
-    """P0 回归：ProxyItemResponse 必须保留 11 字段（含 source / last_used_for_crawl）"""
+    """P0 回归：ProxyItemResponse 必须保留全部字段
+
+    单独构造 ProxyItemResponse 时只填基础 11 字段（ISO 字段保持 None），
+    由 item_to_response_dict() 在路由层补全 ISO。
+    """
     item = ProxyItem(
         ip="8.8.8.8", port=53, score=15,
         source="google-dns",
         last_used_for_crawl=1234567890.5,
     )
-    from api.schemas import ProxyItemResponse
+    from api.schemas import ProxyItemResponse, item_to_response_dict
     resp = ProxyItemResponse(**item.to_dict())
     d = resp.model_dump()
+    # 基础 11 字段必须全部保留
     assert "source" in d, "source 字段丢失"
     assert "last_used_for_crawl" in d, "last_used_for_crawl 字段丢失"
     assert d["source"] == "google-dns"
     assert d["last_used_for_crawl"] == 1234567890.5
-    assert len(d) == 11, f"应返回 11 字段，实际 {len(d)}"
-    print("✓ test_proxy_item_response_includes_all_11_fields (P0 丢字段修复)")
+
+    # item_to_response_dict 必须自动填 ISO 字段
+    d2 = item_to_response_dict(item)
+    assert d2["last_check_iso"] is None  # ts=0 时 None
+    assert d2["created_at_iso"] is None
+    print("✓ test_proxy_item_response_includes_all_11_fields (P0 丢字段 + ISO helper)")
 
 
 def test_top_includes_count():
@@ -197,9 +206,9 @@ def test_validation_error_wrapped_to_business_format():
     assert r.status_code == 422, "HTTP 状态码保留 422"
     body = r.json()
     assert body["code"] == 1, "422 也走业务 code=1"
-    assert "参数校验失败" in body["msg"], f"msg 应说明参数校验失败，实际 {body['msg']}"
+    assert "validation failed" in body["msg"], f"msg 应英文说明校验失败，实际 {body['msg']}"
     assert body["data"] is None
-    print("✓ test_validation_error_wrapped_to_business_format (P0 双轨制修复)")
+    print("✓ test_validation_error_wrapped_to_business_format (P0 双轨制 + 英文 msg)")
 
 
 def test_remove_success_returns_data_not_null():
@@ -238,6 +247,112 @@ def test_proxy_random_serializes_all_fields():
     print("✓ test_proxy_random_serializes_all_fields (端到端 P0 验证)")
 
 
+def test_iso_timestamps_present_and_format():
+    """P2 回归：/proxy/random 响应必须包含 last_check_iso + created_at_iso（ISO8601 格式）"""
+    import asyncio
+    import re
+    item = ProxyItem(
+        ip="7.7.7.7", port=8080, score=10,
+        last_check=1700000000.0,    # 2023-11-14T22:13:20Z
+        created_at=1600000000.0,    # 2020-09-13T12:26:40Z
+    )
+    asyncio.run(pool.add(item))
+
+    r = get_client().get("/proxy/random")
+    data = r.json()["data"]
+    assert data is not None
+    # ISO8601 格式（含 T 和毫秒 +Z）：2023-11-14T22:13:20.000+00:00
+    iso_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$")
+    assert iso_re.match(data["last_check_iso"]), \
+        f"last_check_iso 格式错: {data['last_check_iso']}"
+    assert iso_re.match(data["created_at_iso"]), \
+        f"created_at_iso 格式错: {data['created_at_iso']}"
+    pool._pool.clear()
+    print("✓ test_iso_timestamps_present_and_format (P2 ISO8601)")
+
+
+def test_iso_timestamps_null_for_zero():
+    """P2 边界：ts=0 时 ISO 字段必须是 None（避免 1970-01-01 噪声）"""
+    item = ProxyItem(
+        ip="7.7.7.8", port=8081, score=10,
+        last_check=0.0,   # 默认值，未验证过
+        created_at=0.0,
+    )
+    from api.schemas import item_to_response_dict
+    d = item_to_response_dict(item)
+    assert d["last_check_iso"] is None
+    assert d["created_at_iso"] is None
+    print("✓ test_iso_timestamps_null_for_zero (P2 边界)")
+
+
+def test_batch_partial_ok_code_when_verify_short():
+    """P2 回归：/proxy/batch verify 模式只找到 < n 时 code=2（部分成功）"""
+    import asyncio
+    pool._pool.clear()
+    # 池里只有 1 个代理，请求 3 个 verify
+    asyncio.run(_add_one(ip="1.1.1.1", port=80, score=20))
+
+    r = get_client().post(
+        "/proxy/batch",
+        json={"n": 3, "verify": True, "verify_timeout": 1.0},
+    )
+    body = r.json()
+    assert body["code"] == 2, f"部分成功应 code=2，实际 {body['code']}"
+    assert "partial" in body["msg"], f"msg 应提示 partial，实际 {body['msg']}"
+    assert body["data"]["requested"] == 3
+    assert body["data"]["count"] == 1
+    assert len(body["data"]["items"]) == 1
+    pool._pool.clear()
+    print("✓ test_batch_partial_ok_code_when_verify_short (P2 code=2)")
+
+
+def test_batch_full_ok_code_when_verify_satisfied():
+    """P2 边界：/proxy/batch verify 模式刚好满足时 code=0（不是 2）"""
+    import asyncio
+    pool._pool.clear()
+    for i in range(3):
+        asyncio.run(_add_one(ip=f"1.1.1.{i+1}", port=80, score=20))
+
+    r = get_client().post(
+        "/proxy/batch",
+        json={"n": 3, "verify": True, "verify_timeout": 1.0},
+    )
+    body = r.json()
+    assert body["code"] == 0, f"完全满足应 code=0，实际 {body['code']}"
+    assert body["data"]["count"] == 3
+    pool._pool.clear()
+    print("✓ test_batch_full_ok_code_when_verify_satisfied (P2 边界)")
+
+
+def test_msg_is_english_no_chinese():
+    """P2 回归：所有 msg / detail 必须是英文（不再有中英混杂）"""
+    import re
+    cn_pattern = re.compile(r"[\u4e00-\u9fff]+")  # 中文字符
+    # 查 5 个代表性接口
+    samples = [
+        ("GET", "/health"),
+        ("GET", "/proxy/count"),
+        ("GET", "/proxy/random"),
+        ("GET", "/proxy/stats"),
+        ("POST", "/proxy/feedback"),  # 期望 422
+    ]
+    for method, path in samples:
+        if method == "GET":
+            r = get_client().get(path)
+        else:
+            r = get_client().post(path, json={"ip": "1.2.3.4", "port": 80, "success": True})
+        body = r.json()
+        assert not cn_pattern.search(body["msg"]), \
+            f"{method} {path} msg 含中文: {body['msg']!r}"
+        # data 里也不应有中文（仅检查 None/对象/数组）
+        if isinstance(body["data"], dict):
+            for k, v in body["data"].items():
+                if isinstance(v, str):
+                    assert not cn_pattern.search(v), \
+                        f"{method} {path} data.{k} 含中文: {v!r}"
+    print("✓ test_msg_is_english_no_chinese (P2 msg 统一化)")
+
+
 if __name__ == "__main__":
     setup_module(None)
     try:
@@ -259,6 +374,12 @@ if __name__ == "__main__":
         test_validation_error_wrapped_to_business_format()
         test_remove_success_returns_data_not_null()
         test_proxy_random_serializes_all_fields()
-        print("\n=== API 测试全部通过（含 8 个新增回归） ===")
+        # 2026-09-06 P2 新增
+        test_iso_timestamps_present_and_format()
+        test_iso_timestamps_null_for_zero()
+        test_batch_partial_ok_code_when_verify_short()
+        test_batch_full_ok_code_when_verify_satisfied()
+        test_msg_is_english_no_chinese()
+        print("\n=== API 测试全部通过（含 8 个 P0 回归 + 5 个 P2 回归） ===")
     finally:
         teardown_module(None)
