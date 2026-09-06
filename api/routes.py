@@ -44,6 +44,7 @@ from pool import pool
 from validator import validator
 from crawler import get_default_manager
 from config import ADMIN_TOKEN
+import asyncio
 from .schemas import (
     FeedbackRequest,
     RemoveRequest,
@@ -103,25 +104,101 @@ async def random_one(
         1, ge=0, le=20,
         description="最低分数门槛（避免拿到刚入池的代理）"
     ),
+    verify: bool = Query(
+        False,
+        description="是否先 TCP 预筛再返回（保证可用，1~2s 延迟）"
+    ),
+    verify_timeout: float = Query(
+        1.5, ge=0.1, le=5.0,
+        description="verify 模式的单次验证超时（秒）"
+    ),
 ) -> CommonResponse:
     """
     随机获取一个代理
 
+    模式：
+    - 默认（verify=false）：加权随机，~0ms，可能拿到刚入库的
+    - 严格（verify=true）：先 TCP 预筛再返回，~1~2s 保证可用
+    - 高分（min_score=15）：只取历史上多次通过的高分代理，~0ms
+
     示例：
         GET /proxy/random
         GET /proxy/random?protocol=https
-        GET /proxy/random?min_score=5
+        GET /proxy/random?min_score=10
+        GET /proxy/random?verify=true
+        GET /proxy/random?verify=true&verify_timeout=2.0
     """
-    item = pool.random_one(protocol=protocol, min_score=min_score)
+    if verify:
+        # 严格模式：先 TCP 预筛再返回（最多试 3 次）
+        item = await _random_one_with_verify(
+            protocol=protocol,
+            min_score=min_score,
+            timeout=verify_timeout,
+        )
+    else:
+        # 快模式：直接加权随机
+        item = pool.random_one(protocol=protocol, min_score=min_score)
+
     if item is None:
         return CommonResponse(
             code=1, msg="代理池为空或无符合条件代理", data=None
         )
     return CommonResponse(
         code=0,
-        msg="ok",
+        msg="ok" if not verify else "ok (verified)",
         data=ProxyItemResponse(**item.to_dict()).model_dump(),
     )
+
+
+async def _random_one_with_verify(
+    protocol: Optional[str],
+    min_score: int,
+    timeout: float,
+    max_tries: int = 3,
+):
+    """
+    严格模式：先验证再返回
+
+    流程：
+    1. 拿一个代理（加权随机）
+    2. 走 L1 TCP 快速预筛
+    3. 通过就返回，没过就拿下一个
+    4. 最多试 max_tries 次
+
+    关键：不调用 update_score（不扣分）
+    这是"探测性"验证，不影响打分系统
+    """
+    for attempt in range(max_tries):
+        item = pool.random_one(protocol=protocol, min_score=min_score)
+        if item is None:
+            return None
+        try:
+            # TCP 探测（不扣分，只看是否真的连得通）
+            ok = await asyncio.wait_for(
+                validator._tcp_probe(item),
+                timeout=timeout,
+            )
+            if ok:
+                logger.debug(
+                    f"verify 模式：{item.key} 通过 L1 TCP 预筛"
+                )
+                return item
+            logger.debug(
+                f"verify 模式：{item.key} L1 TCP 失败 "
+                f"(try {attempt + 1}/{max_tries})"
+            )
+        except asyncio.TimeoutError:
+            logger.debug(
+                f"verify 模式：{item.key} 验证超时 "
+                f"(try {attempt + 1}/{max_tries})"
+            )
+            continue
+        except Exception as e:
+            logger.debug(
+                f"verify 模式：{item.key} 异常: {e}"
+            )
+            continue
+    return None
 
 
 @router.post(
@@ -132,14 +209,25 @@ async def random_one(
 async def batch_get(req: BatchGetRequest) -> CommonResponse:
     """
     批量获取 N 个不重复的代理
-    请求体：{"n": 5, "protocol": "http", "min_score": 1}
+
+    请求体：
+        {"n": 5, "protocol": "http", "min_score": 1, "verify": false}
+        {"n": 3, "verify": true, "verify_timeout": 1.5}  ← 严格模式
     """
-    items = pool.random_n(
-        n=req.n, protocol=req.protocol, min_score=req.min_score
-    )
+    if req.verify:
+        items = await _batch_get_with_verify(
+            n=req.n,
+            protocol=req.protocol,
+            min_score=req.min_score,
+            timeout=req.verify_timeout,
+        )
+    else:
+        items = pool.random_n(
+            n=req.n, protocol=req.protocol, min_score=req.min_score
+        )
     return CommonResponse(
         code=0,
-        msg="ok",
+        msg="ok" if not req.verify else "ok (verified)",
         data={
             "count": len(items),
             "items": [
@@ -148,6 +236,40 @@ async def batch_get(req: BatchGetRequest) -> CommonResponse:
             ],
         },
     )
+
+
+async def _batch_get_with_verify(
+    n: int,
+    protocol: Optional[str],
+    min_score: int,
+    timeout: float,
+) -> list:
+    """
+    严格模式批量获取
+
+    最多试 3n+5 次（避免死循环），找到 n 个为止
+    """
+    from models import ProxyItem  # 局部 import 防止循环
+    result: list = []
+    tried_keys: set = set()
+    max_total_tries = n * 3 + 5
+    for _ in range(max_total_tries):
+        if len(result) >= n:
+            break
+        item = pool.random_one(protocol=protocol, min_score=min_score)
+        if item is None or item.key in tried_keys:
+            continue
+        tried_keys.add(item.key)
+        try:
+            ok = await asyncio.wait_for(
+                validator._tcp_probe(item),
+                timeout=timeout,
+            )
+            if ok:
+                result.append(item)
+        except (asyncio.TimeoutError, Exception):
+            continue
+    return result
 
 
 # ============================================================

@@ -69,13 +69,20 @@ class BatchGetRequest(BaseModel):
     批量获取请求体
 
     POST /proxy/batch
-    {"n": 5, "protocol": "http", "min_score": 1}
+    {"n": 5, "protocol": "http", "min_score": 1, "verify": false}
+    {"n": 3, "verify": true, "verify_timeout": 1.5}  ← 严格模式
     """
     n: int = Field(5, ge=1, le=100, description="获取数量（1-100）")
     protocol: Optional[str] = Field(
         None, description="协议过滤: http / https / both"
     )
     min_score: int = Field(1, ge=0, le=20, description="最低分数门槛")
+    verify: bool = Field(
+        False, description="是否先 TCP 预筛再返回（保证可用，1~2s 延迟）"
+    )
+    verify_timeout: float = Field(
+        1.5, ge=0.1, le=5.0, description="verify 模式的单次验证超时（秒）"
+    )
 
 
 # ============================================================

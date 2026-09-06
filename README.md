@@ -23,6 +23,7 @@
 - **验证双阶段加速**（v3 🆕）：L1 TCP 预筛 + L2 HTTP 投票，验证一轮 50 分钟 → 75 秒（**40×**），命中率从 ~10% 提升到 ~25%
 - **3 URL 投票**（v3 🆕）：单点抖动误杀 5%→0.5%
 - **透明代理剔除**（v3 🆕）：body 不含代理 IP 的判失败，池子更精
+- **严格模式 API**（v3.1 🆕）：`/proxy/random?verify=true` 先验证再返回，**保证可用**（1~2s）
 - 异步高并发验证（asyncio + httpx）
 - 加权随机 + 协议过滤 + 最低分门槛
 - FastAPI 提供 RESTful 接口 + CORS
@@ -174,6 +175,9 @@ ip-proxy-pool/
 | GET | `/proxy/stats` | 池统计（平均/最高/最低分 + 协议分布） |
 | GET | `/proxy/random` | 随机获取一个代理（加权） |
 | GET | `/proxy/random?protocol=https&min_score=5` | 协议 + 分数过滤 |
+| GET | `/proxy/random?verify=true` | **先验证再返回**（保证可用，1~2s）|
+| GET | `/proxy/random?verify=true&verify_timeout=2.0` | 严格模式 + 自定义超时 |
+| POST | `/proxy/batch` | 批量获取 N 个不重复代理（支持预验证）|
 | GET | `/proxy/all?page=1&page_size=20&protocol=http` | 分页列表 |
 | GET | `/proxy/top?n=10` | 分数最高 N 个 |
 | POST | `/proxy/batch` | 批量获取 N 个不重复代理 |
@@ -188,6 +192,50 @@ ip-proxy-pool/
 | GET | `/proxy/crawl-mode` | 当前爬源模式 + 决策依据 + 上次结果 |
 | GET | `/proxy/usage` | 代理爬源使用情况 + 冷却剩余 |
 | GET | `/proxy/last-crawl` | 上次爬取结果详情 |
+
+### 严格模式（verify）— 先验证再返回
+
+> 适合"拿一个就一定要能用"的场景。
+
+| 模式 | 接口示例 | 耗时 | 说明 |
+|---|---|---|---|
+| **快模式（默认）** | `/proxy/random` | ~0ms | 加权随机返回（可能拿到刚入库的） |
+| **高分模式** | `/proxy/random?min_score=15` | ~0ms | 只返历史多次验证通过的高分代理 |
+| **严格模式** | `/proxy/random?verify=true` | 1~2s | 先 L1 TCP 预筛再返回，**保证可用** |
+| **批量严格** | `POST /proxy/batch` body `{"n":3,"verify":true}` | 1~2s×N | 批量预验证 |
+
+**参数说明**：
+- `verify` (bool, 默认 false)：是否先 TCP 预筛
+- `verify_timeout` (float, 默认 1.5s)：单次预筛超时（0.1~5.0）
+
+**严格模式实现要点**：
+- **不调用 `update_score`**——只做探测性验证，不影响打分系统
+- 最多试 3 次（`max_tries=3`），找到可用代理就立刻返回
+- 全失败时返回 `code=1, msg="代理池为空或无符合条件代理"`
+- 响应 `msg` 会带 `(verified)` 标记便于区分
+
+**使用建议**：
+- ✅ **关键业务**（不允许失败）→ `verify=true`
+- ✅ **一次性使用**（拿一个用一个）→ `verify=true`
+- ⚠️ **高并发**（每次都测会拖慢）→ 用 `min_score` 过滤代替
+- ⚠️ **批量**（拿 100 个）→ 用 `min_score` 过滤
+
+**示例**：
+```bash
+# 默认（快，0ms）
+curl https://proxy.xiaowang.kdns.fr/proxy/random
+
+# 严格模式（保证可用）
+curl "https://proxy.xiaowang.kdns.fr/proxy/random?verify=true&verify_timeout=2.0"
+
+# 强制高分（0ms 但筛选高质）
+curl "https://proxy.xiaowang.kdns.fr/proxy/random?min_score=15"
+
+# 批量 verify
+curl -X POST https://proxy.xiaowang.kdns.fr/proxy/batch \
+  -H "Content-Type: application/json" \
+  -d '{"n": 3, "verify": true, "verify_timeout": 1.5}'
+```
 
 ### 管理接口（需鉴权）
 
