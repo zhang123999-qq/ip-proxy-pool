@@ -62,9 +62,37 @@ MAX_SCORE = _getenv_int("MAX_SCORE", 20)
 MIN_SCORE = 0  # 分数下限（<=即删除）
 
 # ==================== 验证参数 ====================
-VALIDATE_TIMEOUT = _getenv_int("VALIDATE_TIMEOUT", 10)
-VALIDATE_CONCURRENCY = _getenv_int("VALIDATE_CONCURRENCY", 50)
-VALIDATE_URL = _getenv_str("VALIDATE_URL", "https://httpbin.org/ip")
+# 单请求 HTTP 超时（秒）—— 真挂的代理 2s 必现失联
+VALIDATE_TIMEOUT = _getenv_int("VALIDATE_TIMEOUT", 2)
+# HTTP 验证并发数（IO 密集，CPU 不卡）
+VALIDATE_CONCURRENCY = _getenv_int("VALIDATE_CONCURRENCY", 500)
+# 兼容老配置：单验证 URL（保留，叠加到 VALIDATE_URLS）
+VALIDATE_URL = _getenv_str("VALIDATE_URL", "")
+# 多 URL 投票：3 个 URL 过 2/3 算活（防单点抖动误杀）
+VALIDATE_URLS_RAW = _getenv_str(
+    "VALIDATE_URLS",
+    "https://1.1.1.1/cdn-cgi/trace,https://httpbin.org/ip,https://ifconfig.me",
+)
+# 把 VALIDATE_URL 兼容合并进来（如果设置了）
+_VALIDATE_URLS_LIST = [u.strip() for u in VALIDATE_URLS_RAW.split(",") if u.strip()]
+if VALIDATE_URL and VALIDATE_URL not in _VALIDATE_URLS_LIST:
+    _VALIDATE_URLS_LIST.insert(0, VALIDATE_URL)
+VALIDATE_URLS: list = _VALIDATE_URLS_LIST or [
+    "https://1.1.1.1/cdn-cgi/trace",
+    "https://httpbin.org/ip",
+    "https://ifconfig.me",
+]
+del _VALIDATE_URLS_LIST
+# 投票通过门槛（默认 2/3 票通过）
+VALIDATE_PASS_THRESHOLD = _getenv_int("VALIDATE_PASS_THRESHOLD", 2)
+# TCP 预筛并发数（Linux/Windows ephemeral port 28K+，撑得住 1000）
+VALIDATE_TCP_CONCURRENCY = _getenv_int("VALIDATE_TCP_CONCURRENCY", 1000)
+# TCP 预筛超时（秒）—— 1s 判死活足够
+VALIDATE_TCP_TIMEOUT = _getenv_float("VALIDATE_TCP_TIMEOUT", 1.0)
+# 验证失败是否重试 1 次（防瞬时抖动误杀免费代理）
+VALIDATE_RETRY_ONCE = _getenv_int("VALIDATE_RETRY_ONCE", 1) == 1
+# 目标 URL 全局速率限制（req/s，防 CDN 报复）
+VALIDATE_MAX_OK_RATE = _getenv_float("VALIDATE_MAX_OK_RATE", 300.0)
 
 # ==================== 采集参数 ====================
 CRAWL_TIMEOUT = _getenv_int("CRAWL_TIMEOUT", 15)
@@ -104,8 +132,10 @@ SCORE_DOWN_CRAWL_FAIL = _getenv_int("SCORE_DOWN_CRAWL_FAIL", 1)
 CRAWL_TOTAL_FAIL_THRESHOLD = _getenv_int("CRAWL_TOTAL_FAIL_THRESHOLD", 5)
 
 # ==================== 调度配置 ====================
-JOB_CRAWL_INTERVAL_MIN = _getenv_int("JOB_CRAWL_INTERVAL_MIN", 10)
-JOB_VALIDATE_INTERVAL_MIN = _getenv_int("JOB_VALIDATE_INTERVAL_MIN", 5)
+# 采集间隔：免费代理源更新频率不高，100 分钟已足够
+JOB_CRAWL_INTERVAL_MIN = _getenv_int("JOB_CRAWL_INTERVAL_MIN", 100)
+# 验证间隔：验证现在 75 秒一轮，8 分钟间隔避免排队
+JOB_VALIDATE_INTERVAL_MIN = _getenv_int("JOB_VALIDATE_INTERVAL_MIN", 8)
 JOB_PERSIST_INTERVAL_HOUR = _getenv_int("JOB_PERSIST_INTERVAL_HOUR", 1)
 
 # ==================== API 配置 ====================

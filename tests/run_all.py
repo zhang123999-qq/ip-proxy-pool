@@ -19,6 +19,7 @@ test_files = [
     "test_storage.py",
     "test_admin_auth.py",
     "test_custom_sources.py",
+    "test_validator_stages.py",
 ]
 
 
