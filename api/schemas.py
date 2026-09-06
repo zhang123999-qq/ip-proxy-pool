@@ -89,7 +89,11 @@ class BatchGetRequest(BaseModel):
 # 响应体模型
 # ============================================================
 class ProxyItemResponse(BaseModel):
-    """单个代理的完整信息"""
+    """单个代理的完整信息
+
+    字段必须与 models.ProxyItem.to_dict() 一一对应（共 11 个），
+    否则 Pydantic v2 会静默丢弃未声明字段。
+    """
     ip: str
     port: int
     protocol: str
@@ -99,6 +103,8 @@ class ProxyItemResponse(BaseModel):
     fail_count: int
     last_check: float
     created_at: float
+    source: str = ""                # 来源标识（如 "kuaidaili-free"）
+    last_used_for_crawl: float = 0.0  # 上次用于爬源的时间戳
 
 
 class CommonResponse(BaseModel):

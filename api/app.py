@@ -20,8 +20,10 @@ FastAPI 应用初始化
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from config import API_TITLE, API_VERSION
 from .routes import router
@@ -91,6 +93,39 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ----- 统一错误响应：业务 {code, msg, data} 格式 -----
+    # 不再让 FastAPI 默认 {"detail": ...} 直接返回，避免客户端写两套解析
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """
+        HTTPException → 业务响应包
+        HTTP 状态码保留（401/403/404/500），body 统一为 {code, msg, data}
+        - 鉴权失败 (401/403) → code=1, msg=detail
+        - 业务不存在 (404) → code=1, msg=detail
+        - 服务器错误 (5xx) → code=1, msg=detail
+        """
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"code": 1, "msg": str(exc.detail), "data": None},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ):
+        """
+        Pydantic 入参校验失败（422）→ 业务响应包
+        错误详情放在 msg（首条），data=None
+        """
+        errors = exc.errors()
+        first = errors[0] if errors else {}
+        loc = ".".join(str(p) for p in first.get("loc", []))
+        msg_part = f"{loc}: {first.get('msg', 'invalid')}" if loc else first.get("msg", "invalid")
+        return JSONResponse(
+            status_code=422,
+            content={"code": 1, "msg": f"参数校验失败: {msg_part}", "data": None},
+        )
 
     # ----- 访问日志中间件 -----
     @app.middleware("http")

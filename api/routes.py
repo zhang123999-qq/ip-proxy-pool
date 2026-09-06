@@ -323,6 +323,7 @@ async def top(n: int = Query(10, ge=1, le=100)) -> CommonResponse:
         code=0,
         msg="ok",
         data={
+            "count": len(items),
             "items": [
                 ProxyItemResponse(**it.to_dict()).model_dump()
                 for it in items
@@ -408,7 +409,11 @@ async def remove(req: RemoveRequest) -> CommonResponse:
     ok = await pool.remove(req.ip, req.port)
     if not ok:
         raise HTTPException(status_code=404, detail="代理不在池中")
-    return CommonResponse(code=0, msg=f"已删除 {req.ip}:{req.port}")
+    return CommonResponse(
+        code=0,
+        msg=f"已删除 {req.ip}:{req.port}",
+        data={"ip": req.ip, "port": req.port},
+    )
 
 
 # ============================================================
@@ -505,9 +510,17 @@ async def crawl_mode() -> CommonResponse:
 async def usage() -> CommonResponse:
     """
     返回所有曾经用于爬源的代理 + 冷却剩余时间
+
+    data 形状统一为 {count, items[]}，与 /proxy/top / /proxy/all 保持一致
     """
+    items = pool.get_usage()
     return CommonResponse(
-        code=0, msg="ok", data=pool.get_usage()
+        code=0,
+        msg="ok",
+        data={
+            "count": len(items),
+            "items": items,
+        },
     )
 
 
@@ -549,7 +562,11 @@ async def save_now() -> CommonResponse:
 async def clear() -> CommonResponse:
     """清空代理池（仅调试用，需要 ADMIN_TOKEN）"""
     await pool.clear()
-    return CommonResponse(code=0, msg="cleared")
+    return CommonResponse(
+        code=0,
+        msg="cleared",
+        data={"cleared": True},
+    )
 
 
 # ============================================================
