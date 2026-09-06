@@ -124,7 +124,7 @@ def create_app() -> FastAPI:
         msg_part = f"{loc}: {first.get('msg', 'invalid')}" if loc else first.get("msg", "invalid")
         return JSONResponse(
             status_code=422,
-            content={"code": 1, "msg": f"参数校验失败: {msg_part}", "data": None},
+            content={"code": 1, "msg": f"validation failed: {msg_part}", "data": None},
         )
 
     # ----- 访问日志中间件 -----

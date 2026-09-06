@@ -49,10 +49,11 @@ from .schemas import (
     FeedbackRequest,
     RemoveRequest,
     BatchGetRequest,
-    ProxyItemResponse,
     CommonResponse,
     SourceCreateRequest,
     SourceToggleRequest,
+    RespCode,
+    item_to_response_dict,
 )
 from storage.dao import CustomSource, custom_source_dao
 from crawler import build_crawler_from_source
@@ -80,11 +81,11 @@ async def require_admin_token(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401,
-            detail="缺少 Authorization: Bearer <token>",
+            detail="missing Authorization: Bearer <token>",
         )
     token = authorization[len("Bearer "):].strip()
     if token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="token 无效")
+        raise HTTPException(status_code=403, detail="invalid token")
 
 
 # ============================================================
@@ -141,12 +142,14 @@ async def random_one(
 
     if item is None:
         return CommonResponse(
-            code=1, msg="代理池为空或无符合条件代理", data=None
+            code=RespCode.BIZ_ERROR,
+            msg="no proxy available",
+            data=None,
         )
     return CommonResponse(
-        code=0,
+        code=RespCode.OK,
         msg="ok" if not verify else "ok (verified)",
-        data=ProxyItemResponse(**item.to_dict()).model_dump(),
+        data=item_to_response_dict(item),
     )
 
 
@@ -225,15 +228,21 @@ async def batch_get(req: BatchGetRequest) -> CommonResponse:
         items = pool.random_n(
             n=req.n, protocol=req.protocol, min_score=req.min_score
         )
+    # 区分完全成功 vs 部分成功（PARTIAL_OK 仅在 verify 模式下触发）
+    actual = len(items)
+    if req.verify and 0 < actual < req.n:
+        code = RespCode.PARTIAL_OK
+        msg = f"partial: requested {req.n}, found {actual} (verified)"
+    else:
+        code = RespCode.OK
+        msg = "ok" if not req.verify else "ok (verified)"
     return CommonResponse(
-        code=0,
-        msg="ok" if not req.verify else "ok (verified)",
+        code=code,
+        msg=msg,
         data={
-            "count": len(items),
-            "items": [
-                ProxyItemResponse(**it.to_dict()).model_dump()
-                for it in items
-            ],
+            "requested": req.n,
+            "count": actual,
+            "items": [item_to_response_dict(it) for it in items],
         },
     )
 
@@ -297,16 +306,13 @@ async def all_proxies(
     end = start + page_size
     page_items = items[start:end]
     return CommonResponse(
-        code=0,
+        code=RespCode.OK,
         msg="ok",
         data={
             "total": total,
             "page": page,
             "page_size": page_size,
-            "items": [
-                ProxyItemResponse(**it.to_dict()).model_dump()
-                for it in page_items
-            ],
+            "items": [item_to_response_dict(it) for it in page_items],
         },
     )
 
@@ -320,14 +326,12 @@ async def top(n: int = Query(10, ge=1, le=100)) -> CommonResponse:
     """获取分数最高的 N 个代理（监控/展示用）"""
     items = pool.top_n(n)
     return CommonResponse(
-        code=0,
+        code=RespCode.OK,
         msg="ok",
         data={
+            "requested": n,
             "count": len(items),
-            "items": [
-                ProxyItemResponse(**it.to_dict()).model_dump()
-                for it in items
-            ],
+            "items": [item_to_response_dict(it) for it in items],
         },
     )
 
@@ -339,7 +343,7 @@ async def top(n: int = Query(10, ge=1, le=100)) -> CommonResponse:
 async def health() -> CommonResponse:
     """返回服务是否可用 + 当前代理数"""
     return CommonResponse(
-        code=0, msg="ok", data={"size": pool.size()}
+        code=RespCode.OK, msg="ok", data={"size": pool.size()}
     )
 
 
@@ -353,14 +357,14 @@ async def stats() -> CommonResponse:
     - avg_score / max_score / min_score
     - http / https / both 协议分布
     """
-    return CommonResponse(code=0, msg="ok", data=pool.stats())
+    return CommonResponse(code=RespCode.OK, msg="ok", data=pool.stats())
 
 
 @router.get(
     "/proxy/count", response_model=CommonResponse, summary="当前代理数量"
 )
 async def count() -> CommonResponse:
-    return CommonResponse(code=0, msg="ok", data={"size": pool.size()})
+    return CommonResponse(code=RespCode.OK, msg="ok", data={"size": pool.size()})
 
 
 # ============================================================
@@ -382,13 +386,13 @@ async def feedback(req: FeedbackRequest) -> CommonResponse:
         {"ip": "1.2.3.4", "port": 8080, "success": true}
     """
     if not pool.contains(req.ip, req.port):
-        raise HTTPException(status_code=404, detail="代理不在池中")
+        raise HTTPException(status_code=404, detail="proxy not in pool")
     ok, new_score, msg = await pool.update_score(
         req.ip, req.port, req.success
     )
     logger.info(f"feedback: {msg}")
     return CommonResponse(
-        code=0 if ok else 1,
+        code=RespCode.OK if ok else RespCode.BIZ_ERROR,
         msg=msg,
         data={
             "ip": req.ip,
@@ -408,10 +412,10 @@ async def remove(req: RemoveRequest) -> CommonResponse:
     """主动剔除某些已知不可用的代理"""
     ok = await pool.remove(req.ip, req.port)
     if not ok:
-        raise HTTPException(status_code=404, detail="代理不在池中")
+        raise HTTPException(status_code=404, detail="proxy not in pool")
     return CommonResponse(
-        code=0,
-        msg=f"已删除 {req.ip}:{req.port}",
+        code=RespCode.OK,
+        msg=f"removed {req.ip}:{req.port}",
         data={"ip": req.ip, "port": req.port},
     )
 
@@ -444,7 +448,7 @@ async def refresh(mode: str = "auto") -> CommonResponse:
             ]
             await validator.validate(new_items)
         return CommonResponse(
-            code=0, msg="ok",
+            code=RespCode.OK, msg="ok",
             data={
                 "mode": result.mode,
                 "fetched": len(result.items),
@@ -484,7 +488,7 @@ async def crawl_mode() -> CommonResponse:
     decided = manager.decide_mode("auto")
     candidates = pool.get_crawl_candidates(limit=100)
     return CommonResponse(
-        code=0, msg="ok",
+        code=RespCode.OK, msg="ok",
         data={
             "configured_mode": CRAWL_MODE,
             "decided_mode": decided.value,
@@ -515,7 +519,7 @@ async def usage() -> CommonResponse:
     """
     items = pool.get_usage()
     return CommonResponse(
-        code=0,
+        code=RespCode.OK,
         msg="ok",
         data={
             "count": len(items),
@@ -533,9 +537,9 @@ async def last_crawl() -> CommonResponse:
     """返回最近一次爬取的完整结果"""
     manager = get_default_manager()
     if manager.last_result is None:
-        return CommonResponse(code=1, msg="暂无爬取记录", data=None)
+        return CommonResponse(code=RespCode.BIZ_ERROR, msg="no crawl history", data=None)
     return CommonResponse(
-        code=0, msg="ok", data=manager.last_result.to_dict()
+        code=RespCode.OK, msg="ok", data=manager.last_result.to_dict()
     )
 
 
@@ -549,7 +553,7 @@ async def last_crawl() -> CommonResponse:
 async def save_now() -> CommonResponse:
     """手动把当前池刷盘到 SQLite（需要 ADMIN_TOKEN）"""
     n = await pool.save()
-    return CommonResponse(code=0, msg="ok", data={"saved": n})
+    return CommonResponse(code=RespCode.OK, msg="ok", data={"saved": n})
 
 
 @router.post(
@@ -563,7 +567,7 @@ async def clear() -> CommonResponse:
     """清空代理池（仅调试用，需要 ADMIN_TOKEN）"""
     await pool.clear()
     return CommonResponse(
-        code=0,
+        code=RespCode.OK,
         msg="cleared",
         data={"cleared": True},
     )
@@ -606,14 +610,14 @@ async def create_source(req: SourceCreateRequest) -> CommonResponse:
     except Exception as e:
         # 失败回滚
         custom_source_dao.delete(src.name)
-        raise HTTPException(status_code=400, detail=f"源配置不合法: {e}")
+        raise HTTPException(status_code=400, detail=f"source config invalid: {e}")
 
     # 热更新 manager
     manager = get_default_manager()
     n = manager.reload_crawlers()
 
     return CommonResponse(
-        code=0, msg=f"已添加源 [{req.name}]",
+        code=RespCode.OK, msg=f"source added: [{req.name}]",
         data={
             **src.to_dict(),
             "preview_name": crawler.name,
@@ -635,7 +639,7 @@ async def list_sources() -> CommonResponse:
     """
     items = custom_source_dao.list_all(enabled_only=False)
     return CommonResponse(
-        code=0, msg="ok",
+        code=RespCode.OK, msg="ok",
         data={
             "count": len(items),
             "items": [it.to_dict() for it in items],
@@ -654,12 +658,12 @@ async def delete_source(name: str) -> CommonResponse:
     """按 name 删除一个自定义源（内置源不可删）"""
     ok = custom_source_dao.delete(name)
     if not ok:
-        raise HTTPException(status_code=404, detail=f"源 [{name}] 不存在")
+        raise HTTPException(status_code=404, detail=f"source [{name}] not found")
     # 热更新 manager
     manager = get_default_manager()
     n = manager.reload_crawlers()
     return CommonResponse(
-        code=0, msg=f"已删除源 [{name}]",
+        code=RespCode.OK, msg=f"source removed: [{name}]",
         data={"active_sources_total": n},
     )
 
@@ -675,10 +679,10 @@ async def toggle_source(name: str, req: SourceToggleRequest) -> CommonResponse:
     """启停某个源（不会真删，可再开）"""
     ok = custom_source_dao.set_enabled(name, req.enabled)
     if not ok:
-        raise HTTPException(status_code=404, detail=f"源 [{name}] 不存在")
+        raise HTTPException(status_code=404, detail=f"source [{name}] not found")
     manager = get_default_manager()
     n = manager.reload_crawlers()
     return CommonResponse(
-        code=0, msg="ok",
+        code=RespCode.OK, msg="ok",
         data={"name": name, "enabled": req.enabled, "active_sources_total": n},
     )

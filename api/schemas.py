@@ -26,7 +26,7 @@ def _validate_ip(v: str) -> str:
         ipaddress.IPv4Address(v)
         return v
     except (ValueError, TypeError):
-        raise ValueError(f"非法 IP 地址: {v}")
+        raise ValueError(f"invalid IPv4 address: {v}")
 
 
 # ============================================================
@@ -105,6 +105,9 @@ class ProxyItemResponse(BaseModel):
     created_at: float
     source: str = ""                # 来源标识（如 "kuaidaili-free"）
     last_used_for_crawl: float = 0.0  # 上次用于爬源的时间戳
+    # ISO8601 可读字段（0 时为 None，避免出现 1970-01-01 噪声）
+    last_check_iso: Optional[str] = None
+    created_at_iso: Optional[str] = None
 
 
 class CommonResponse(BaseModel):
@@ -186,7 +189,7 @@ class SourceCreateRequest(BaseModel):
     def _v_type(cls, v: str) -> str:
         v = v.lower().strip()
         if v not in {"text", "table", "api"}:
-            raise ValueError("type 必须是 text / table / api")
+            raise ValueError("type must be one of text/table/api")
         return v
 
     @field_validator("proto")
@@ -194,7 +197,7 @@ class SourceCreateRequest(BaseModel):
     def _v_proto(cls, v: str) -> str:
         v = v.lower().strip()
         if v not in {"http", "https"}:
-            raise ValueError("proto 必须是 http / https")
+            raise ValueError("proto must be http or https")
         return v
 
     @field_validator("name")
@@ -203,7 +206,7 @@ class SourceCreateRequest(BaseModel):
         # 名字只允许字母数字中划线下划线（防注入到日志/csv）
         import re
         if not re.fullmatch(r"[A-Za-z0-9._\-]+", v):
-            raise ValueError("name 只能包含字母/数字/中划线/下划线/点")
+            raise ValueError("name must contain only letters/digits/hyphens/underscores/dots")
         return v
 
 
@@ -214,3 +217,45 @@ class SourceToggleRequest(BaseModel):
     {"enabled": false}
     """
     enabled: bool = Field(..., description="true=启用, false=停用")
+
+
+# ============================================================
+# 业务响应 code 常量（语义化枚举，避免路由里到处 0/1/2）
+# ============================================================
+class RespCode:
+    """统一响应 code 枚举
+
+    - OK          0  完全成功
+    - BIZ_ERROR   1  业务错误（空池、找不到、不存在）
+    - PARTIAL_OK  2  部分成功（如批量请求只满足部分数量）
+    """
+    OK = 0
+    BIZ_ERROR = 1
+    PARTIAL_OK = 2
+
+
+# ============================================================
+# 工具：把 Unix 浮点时间戳转 ISO8601（UTC，毫秒精度）
+# ============================================================
+def ts_to_iso(ts: float) -> Optional[str]:
+    """浮点 Unix 时间戳 → ISO8601 字符串；ts<=0 时返回 None（避免 1970-01-01 噪声）"""
+    if not ts or ts <= 0:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(
+            timespec="milliseconds"
+        )
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def item_to_response_dict(item) -> dict:
+    """ProxyItem → 已填 ISO 字段的 dict（路由层统一调用）
+
+    自动把 last_check / created_at 转 ISO8601，0 值字段给 None
+    """
+    d = ProxyItemResponse(**item.to_dict()).model_dump()
+    d["last_check_iso"] = ts_to_iso(item.last_check)
+    d["created_at_iso"] = ts_to_iso(item.created_at)
+    return d
