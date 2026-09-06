@@ -109,3 +109,7 @@ scratch_*.py
 # 测试报告
 test_results/
 test_report.html
+
+# WorkBuddy sandbox 临时产物（不要提交）
+.local_pkgs/
+.workbuddy/
