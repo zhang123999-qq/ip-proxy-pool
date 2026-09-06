@@ -249,7 +249,6 @@ async def _batch_get_with_verify(
 
     最多试 3n+5 次（避免死循环），找到 n 个为止
     """
-    from models import ProxyItem  # 局部 import 防止循环
     result: list = []
     tried_keys: set = set()
     max_total_tries = n * 3 + 5

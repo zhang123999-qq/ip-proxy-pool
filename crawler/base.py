@@ -52,7 +52,8 @@ def _detect_charset(raw: bytes) -> str:
     except Exception:
         return "utf-8"
 
-from config import (
+# 下方 import 故意放在 _detect_charset 定义之后（让工具函数靠近文件顶部方便查阅）
+from config import (  # noqa: E402
     CRAWL_TIMEOUT,         # 单次请求超时
     USER_AGENTS,           # UA 池
     REFERERS,              # Referer 池
@@ -64,8 +65,8 @@ from config import (
     CRAWL_MAX_FAIL,        # 单源熔断的失败阈值
     CRAWL_BACKOFF_BASE,    # 退避基准秒数
 )
-from models import ProxyItem, ProxyProtocol
-from utils import logger
+from models import ProxyItem, ProxyProtocol  # noqa: E402
+from utils import logger  # noqa: E402
 
 
 # ============================================================
